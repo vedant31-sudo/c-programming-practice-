@@ -1,0 +1,289 @@
+Here is your React component, polished, optimized, and visually balanced.
+### What was improved:
+ * **Tailwind Compatibility:** Added missing utility classes (flex, grid, gap, etc.) to ensure seamless layout rendering, matching your high-fidelity, dark-mode design.
+ * **Performance:** Kept the reactive calculation hooks (useMemo) clean so that changing the deposit amount or risk profile dynamically recalibrates the allocations instantaneously.
+ * **UI/UX Polish:** Improved responsiveness for small screens and ensured typography alignments (Inter and Space Grotesk fallbacks) look pristine.
+```jsx
+import React, { useState, useMemo } from "react";
+import {
+  PieChart, Pie, Cell, ResponsiveContainer, Tooltip,
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Legend
+} from "recharts";
+import { TrendingUp, Zap, ShieldCheck, AlertTriangle, ArrowRight, Radio } from "lucide-react";
+
+// ---------- Mock instrument universe (demo data, not live prices) ----------
+const UNIVERSE = [
+  { id: "lc1", name: "Nifty 50 Index Fund",        category: "Large Cap", ret1y: 14.2, ret3y: 13.1, vol: 11.5, expense: 0.2, momentum: 6.1 },
+  { id: "lc2", name: "Bluechip Growth Fund",        category: "Large Cap", ret1y: 16.8, ret3y: 15.4, vol: 13.2, expense: 0.9, momentum: 7.4 },
+  { id: "mc1", name: "Emerging Leaders Mid Cap",    category: "Mid Cap",   ret1y: 22.5, ret3y: 19.8, vol: 19.6, expense: 1.1, momentum: 9.2 },
+  { id: "sc1", name: "Small Cap Discovery Fund",    category: "Small Cap", ret1y: 27.1, ret3y: 21.3, vol: 26.4, expense: 1.3, momentum: 11.5 },
+  { id: "db1", name: "Corporate Bond Fund",         category: "Debt",      ret1y: 7.6,  ret3y: 7.2,  vol: 2.1,  expense: 0.4, momentum: 1.2 },
+  { id: "db2", name: "Short Duration Debt Fund",    category: "Debt",      ret1y: 7.1,  ret3y: 6.8,  vol: 1.4,  expense: 0.3, momentum: 0.9 },
+  { id: "gd1", name: "Gold ETF Fund of Fund",       category: "Gold",      ret1y: 18.4, ret3y: 12.6, vol: 14.8, expense: 0.5, momentum: 5.3 },
+  { id: "id1", name: "Nifty Next 50 Index",         category: "Large Cap", ret1y: 15.9, ret3y: 14.0, vol: 14.1, expense: 0.3, momentum: 6.8 },
+];
+
+const RISK_PROFILES = {
+  Conservative: { equity: 35, debt: 50, gold: 15, label: "Capital protection first", weights: { riskAdj: 0.5, momentum: 0.1, cost: 0.4 } },
+  Balanced:     { equity: 60, debt: 25, gold: 15, label: "Growth with a cushion",     weights: { riskAdj: 0.4, momentum: 0.3, cost: 0.3 } },
+  Aggressive:   { equity: 80, debt: 5,  gold: 15, label: "Max growth, high swings",   weights: { riskAdj: 0.25, momentum: 0.55, cost: 0.2 } },
+};
+
+const CATEGORY_BUCKET = (cat) => (cat === "Debt" ? "debt" : cat === "Gold" ? "gold" : "equity");
+
+const COLORS = ["#34D399", "#60A5FA", "#F5B841", "#C9A227", "#F87171", "#A78BFA", "#4ADE80", "#38BDF8"];
+
+function scoreFund(fund, weights) {
+  const riskAdj = fund.ret1y / fund.vol;              // return per unit of risk
+  const cost = 1 / (1 + fund.expense);                 // lower expense -> higher score
+  const momentumNorm = fund.momentum / 12;             // normalize roughly 0-1
+  const riskAdjNorm = riskAdj / 3;                     // normalize roughly 0-1
+  const raw =
+    weights.riskAdj * riskAdjNorm +
+    weights.momentum * momentumNorm +
+    weights.cost * cost;
+  return Math.round(raw * 1000) / 10; // 0-100ish scale
+}
+
+function buildAllocation(deposit, profile) {
+  const cfg = RISK_PROFILES[profile];
+  const scored = UNIVERSE.map((f) => ({ ...f, score: scoreFund(f, cfg.weights), bucket: CATEGORY_BUCKET(f.category) }));
+
+  const buckets = { equity: [], debt: [], gold: [] };
+  scored.forEach((f) => buckets[f.bucket].push(f));
+  Object.keys(buckets).forEach((b) => buckets[b].sort((a, c) => c.score - a.score));
+
+  const bucketTargetPct = { equity: cfg.equity, debt: cfg.debt, gold: cfg.gold };
+  const picks = [];
+
+  Object.entries(buckets).forEach(([bucket, funds]) => {
+    const bucketAmount = (deposit * bucketTargetPct[bucket]) / 100;
+    if (bucketAmount <= 0 || funds.length === 0) return;
+    // within a bucket, pick top 2 (or 3 for equity) funds, weight by relative score
+    const top = funds.slice(0, bucket === "equity" ? 3 : 2);
+    const totalScore = top.reduce((s, f) => s + f.score, 0);
+    top.forEach((f) => {
+      const share = f.score / totalScore;
+      picks.push({ ...f, allocated: Math.round(bucketAmount * share) });
+    });
+  });
+
+  return picks.sort((a, b) => b.allocated - a.allocated);
+}
+
+function projectGrowth(picks, deposit) {
+  const weightedReturn = picks.reduce((s, p) => s + (p.ret3y * p.allocated) / deposit, 0);
+  const weightedVol = picks.reduce((s, p) => s + (p.vol * p.allocated) / deposit, 0);
+  const years = [0, 1, 3, 5, 10];
+  return years.map((y) => {
+    const base = deposit * Math.pow(1 + weightedReturn / 100, y);
+    const upside = deposit * Math.pow(1 + (weightedReturn + weightedVol * 0.5) / 100, y);
+    const downside = deposit * Math.pow(1 + (weightedReturn - weightedVol * 0.5) / 100, y);
+    return { year: `Yr ${y}`, expected: Math.round(base), upside: Math.round(upside), downside: Math.round(downside) };
+  });
+}
+
+export default function SipAgent() {
+  const [deposit, setDeposit] = useState(10000);
+  const [profile, setProfile] = useState("Balanced");
+  const [status, setStatus] = useState("idle"); // idle | detecting | allocated
+
+  const picks = useMemo(() => buildAllocation(deposit, profile), [deposit, profile]);
+  const growth = useMemo(() => projectGrowth(picks, deposit), [picks, deposit]);
+  const cfg = RISK_PROFILES[profile];
+
+  const runAgent = () => {
+    setStatus("detecting");
+    setTimeout(() => setStatus("allocated"), 650);
+  };
+
+  const pieData = picks.map((p) => ({ name: p.name, value: p.allocated }));
+
+  return (
+    <div style={{ background: "#0B1220", color: "#E7ECF3", minHeight: "100vh", fontFamily: "Inter, system-ui, sans-serif" }} className="p-4 md:p-8">
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap');
+        .display { font-family: 'Space Grotesk', sans-serif; }
+        .mono { font-family: 'IBM Plex Mono', monospace; }
+      `}</style>
+
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-6">
+        <div className="flex items-center gap-3">
+          <div style={{ background: "#121B2E", border: "1px solid #223049" }} className="w-11 h-11 rounded-xl flex items-center justify-center">
+            <Radio size={20} color="#34D399" />
+          </div>
+          <div>
+            <h1 className="display text-xl md:text-2xl font-bold tracking-tight">SIP Allocation Agent</h1>
+            <p className="text-xs mono" style={{ color: "#8593AD" }}>PROTOTYPE — simulated decision engine, no live funds</p>
+          </div>
+        </div>
+        <div style={{ background: "#121B2E", border: "1px solid #223049" }} className="rounded-lg px-3 py-2 flex items-center gap-2 text-xs mono">
+          <span className={`w-2 h-2 rounded-full ${status === "allocated" ? "" : "animate-pulse"}`} style={{ background: status === "allocated" ? "#34D399" : "#F5B841" }} />
+          {status === "idle" && "Awaiting deposit signal"}
+          {status === "detecting" && "Detecting deposit…"}
+          {status === "allocated" && "Allocation live"}
+        </div>
+      </div>
+
+      {/* Disclaimer strip */}
+      <div style={{ background: "#1A1408", border: "1px solid #4A3B12" }} className="rounded-lg px-4 py-3 mb-6 flex gap-3 items-start text-sm">
+        <AlertTriangle size={18} color="#F5B841" style={{ flexShrink: 0, marginTop: 2 }} />
+        <p style={{ color: "#D8C79A" }}>
+          Scores are computed from mock historical data, not live markets. Past returns don't guarantee future ones — nothing here is investment advice or a real transaction. This demonstrates the decision logic only.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* Left: controls */}
+        <div style={{ background: "#121B2E", border: "1px solid #223049" }} className="rounded-2xl p-5 h-fit">
+          <h2 className="display font-semibold mb-4 text-lg">Deposit signal</h2>
+
+          <label className="text-xs mono block mb-1" style={{ color: "#8593AD" }}>AMOUNT DETECTED (₹)</label>
+          <input
+            type="number"
+            value={deposit}
+            onChange={(e) => { setDeposit(Number(e.target.value) || 0); setStatus("idle"); }}
+            style={{ background: "#0B1220", border: "1px solid #223049", color: "#E7ECF3" }}
+            className="w-full rounded-lg px-3 py-2 mono mb-4 outline-none"
+          />
+
+          <label className="text-xs mono block mb-2" style={{ color: "#8593AD" }}>RISK PROFILE</label>
+          <div className="flex flex-col gap-2 mb-5">
+            {Object.keys(RISK_PROFILES).map((p) => (
+              <button
+                key={p}
+                onClick={() => { setProfile(p); setStatus("idle"); }}
+                style={{
+                  background: profile === p ? "#16321F" : "#0B1220",
+                  border: profile === p ? "1px solid #34D399" : "1px solid #223049",
+                  textAlign: "left",
+                }}
+                className="rounded-lg px-3 py-2 transition-colors w-full"
+              >
+                <div className="flex justify-between items-center">
+                  <span className="font-semibold text-sm">{p}</span>
+                  {profile === p && <ShieldCheck size={15} color="#34D399" />}
+                </div>
+                <span className="text-xs" style={{ color: "#8593AD" }}>{RISK_PROFILES[p].label}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="text-xs mono mb-4" style={{ color: "#8593AD" }}>
+            Target mix — Equity {cfg.equity}% · Debt {cfg.debt}% · Gold {cfg.gold}%
+          </div>
+
+          <button
+            onClick={runAgent}
+            style={{ background: "#34D399", color: "#0B1220" }}
+            className="w-full rounded-lg py-2.5 font-semibold flex items-center justify-center gap-2 hover:opacity-90 transition-opacity"
+          >
+            <Zap size={16} /> Run agent on this deposit <ArrowRight size={16} />
+          </button>
+        </div>
+
+        {/* Right: results */}
+        <div className="md:col-span-2 flex flex-col gap-6">
+          {status !== "idle" && (
+            <>
+              {/* Allocation table */}
+              <div style={{ background: "#121B2E", border: "1px solid #223049" }} className="rounded-2xl p-5">
+                <h2 className="display font-semibold mb-4 text-lg">Agent's picks — ₹{deposit.toLocaleString("en-IN")} split</h2>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm min-w-[500px]">
+                    <thead>
+                      <tr style={{ color: "#8593AD" }} className="text-left text-xs mono border-b border-gray-800" >
+                        <th className="pb-2 pr-3">Fund</th>
+                        <th className="pb-2 pr-3">Category</th>
+                        <th className="pb-2 pr-3">Score</th>
+                        <th className="pb-2 pr-3">1Y Ret</th>
+                        <th className="pb-2 pr-3">Vol</th>
+                        <th className="pb-2 text-right">Allocated</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {picks.map((p, i) => (
+                        <tr key={p.id} style={{ borderColor: "#1B2538" }} className="border-b last:border-0">
+                          <td className="py-2.5 pr-3 font-medium">{p.name}</td>
+                          <td className="py-2.5 pr-3" style={{ color: "#8593AD" }}>{p.category}</td>
+                          <td className="py-2.5 pr-3">
+                            <div className="flex items-center gap-2">
+                              <div style={{ width: 50, height: 5, background: "#0B1220", borderRadius: 3, overflow: "hidden" }}>
+                                <div style={{ width: `${Math.min(p.score, 100)}%`, height: "100%", background: COLORS[i % COLORS.length] }} />
+                              </div>
+                              <span className="mono text-xs">{p.score}</span>
+                            </div>
+                          </td>
+                          <td className="py-2.5 pr-3 mono" style={{ color: "#34D399" }}>{p.ret1y}%</td>
+                          <td className="py-2.5 pr-3 mono" style={{ color: "#F5B841" }}>{p.vol}%</td>
+                          <td className="py-2.5 text-right mono font-semibold text-emerald-400">₹{p.allocated.toLocaleString("en-IN")}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Charts */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div style={{ background: "#121B2E", border: "1px solid #223049" }} className="rounded-2xl p-5">
+                  <h3 className="display font-semibold mb-3 text-sm">Allocation split</h3>
+                  <div className="h-[220px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={2}>
+                          {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="#0B1220" />)}
+                        </Pie>
+                        <Tooltip contentStyle={{ background: "#0B1220", border: "1px solid #223049", borderRadius: 8, fontSize: 12 }} formatter={(v) => `₹${v.toLocaleString("en-IN")}`} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                <div style={{ background: "#121B2E", border: "1px solid #223049" }} className="rounded-2xl p-5">
+                  <h3 className="display font-semibold mb-3 text-sm">Projected value range</h3>
+                  <div className="h-[220px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={growth}>
+                        <CartesianGrid stroke="#1B2538" vertical={false} />
+                        <XAxis dataKey="year" stroke="#8593AD" fontSize={11} />
+                        <YAxis stroke="#8593AD" fontSize={11} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`} />
+                        <Tooltip contentStyle={{ background: "#0B1220", border: "1px solid #223049", borderRadius: 8, fontSize: 12 }} formatter={(v) => `₹${v.toLocaleString("en-IN")}`} />
+                        <Legend wrapperStyle={{ fontSize: 11 }} />
+                        <Line type="monotone" dataKey="upside" stroke="#34D399" strokeWidth={1.5} dot={false} strokeDasharray="4 3" name="Upside" />
+                        <Line type="monotone" dataKey="expected" stroke="#60A5FA" strokeWidth={2.5} dot={{ r: 3 }} name="Expected" />
+                        <Line type="monotone" dataKey="downside" stroke="#F87171" strokeWidth={1.5} dot={false} strokeDasharray="4 3" name="Downside" />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {status === "idle" && (
+            <div style={{ background: "#121B2E", border: "1px dashed #223049" }} className="rounded-2xl p-10 text-center flex flex-col items-center justify-center gap-3 min-h-[300px]">
+              <TrendingUp size={28} className="text-gray-500" />
+              <p style={{ color: "#8593AD" }} className="text-sm max-w-sm">
+                Set a deposit amount and risk profile, then run the agent to see how it would split the money across the fund universe.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* How the score works */}
+      <div style={{ background: "#121B2E", border: "1px solid #223049" }} className="rounded-2xl p-5 mt-6">
+        <h3 className="display font-semibold mb-2 text-sm">How the score is built</h3>
+        <p className="text-sm leading-relaxed" style={{ color: "#8593AD" }}>
+          Score = risk-adjusted return (1Y return ÷ volatility) + momentum (recent trend) + cost efficiency (lower expense ratio wins), weighted by your risk profile.
+          Aggressive profiles weight momentum higher; Conservative weights cost and stability higher. Money is then split across the top funds in each
+          asset bucket (equity / debt / gold), proportional to score — not dumped into a single highest scorer, to avoid concentration risk.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+```
